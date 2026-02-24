@@ -1,82 +1,134 @@
-const AWS = require('aws-sdk');
-const PDFDocument = require('pdfkit');
-const fs = require('fs'); // only needed if loading font from file locally
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Invoice Generator</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        input { padding: 6px; margin: 4px 0; width: 100%; }
+        button { padding: 8px 16px; margin-top: 10px; }
+        .item { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+        .item input { width: 30%; display: inline-block; margin-right: 1%; }
+    </style>
+</head>
+<body>
+    <h1>Create Invoice</h1>
+    <form id="invoiceForm">
+        <label>Customer Name:</label>
+        <input type="text" id="customerName" required>
 
-const s3 = new AWS.S3();
+        <label>Invoice Number:</label>
+        <input type="text" id="invoiceNumber" required>
 
-exports.handler = async (event) => {
-    try {
-        const invoice = JSON.parse(event.body);
+        <label>Invoice Date:</label>
+        <input type="date" id="invoiceDate" required>
 
-        // Create PDF in memory
-        const doc = new PDFDocument({ margin: 50 });
-        const buffers = [];
-        doc.on('data', buffers.push.bind(buffers));
-        doc.on('end', () => {});
+        <h3>Items</h3>
+        <div id="itemsContainer"></div>
+        <button type="button" onclick="addItem()">Add Item</button>
 
-        // Register Times New Roman font
-        doc.registerFont('TimesNewRoman', './Times-New-Roman.ttf');
-        doc.font('TimesNewRoman');
+        <label>Subtotal:</label>
+        <input type="number" id="subtotal" readonly>
 
-        // Header
-        doc.fontSize(20).text('Invoice', { align: 'center' });
-        doc.moveDown();
-        doc.fontSize(12)
-           .text(`Invoice Number: ${invoice.number}`)
-           .text(`Invoice Date: ${invoice.date}`)
-           .text(`Customer: ${invoice.customerName}`)
-           .moveDown();
+        <label>Tax (%):</label>
+        <input type="number" id="taxPercent" value="0">
 
-        // Table of items
-        doc.fontSize(12).text('Items:', { underline: true });
-        doc.moveDown(0.5);
-        invoice.items.forEach(item => {
-            doc.text(`${item.description} - ${item.quantity} x $${item.price.toFixed(2)}`);
+        <label>Discount (%):</label>
+        <input type="number" id="discountPercent" value="0">
+
+        <label>Total:</label>
+        <input type="number" id="totalAmount" readonly>
+
+        <button type="submit">Generate PDF</button>
+    </form>
+
+    <p id="downloadLink"></p>
+
+    <script>
+        const itemsContainer = document.getElementById('itemsContainer');
+
+        function addItem() {
+            const div = document.createElement('div');
+            div.className = 'item';
+            div.innerHTML = `
+                <input type="text" class="itemDescription" placeholder="Description" required>
+                <input type="number" class="itemQuantity" placeholder="Quantity" min="0" value="1" required>
+                <input type="number" class="itemPrice" placeholder="Price" min="0" value="0" required>
+                <button type="button" onclick="removeItem(this)">Remove</button>
+            `;
+            itemsContainer.appendChild(div);
+
+            // Add listeners for dynamic calculation
+            div.querySelector('.itemQuantity').addEventListener('input', updateTotals);
+            div.querySelector('.itemPrice').addEventListener('input', updateTotals);
+
+            updateTotals();
+        }
+
+        function removeItem(button) {
+            button.parentElement.remove();
+            updateTotals();
+        }
+
+        // Update subtotal, total with tax and discount (%)
+        function updateTotals() {
+            const items = document.querySelectorAll('.item');
+            let subtotal = 0;
+            items.forEach(item => {
+                const qty = parseFloat(item.querySelector('.itemQuantity').value) || 0;
+                const price = parseFloat(item.querySelector('.itemPrice').value) || 0;
+                subtotal += qty * price;
+            });
+            document.getElementById('subtotal').value = subtotal.toFixed(2);
+
+            const tax = parseFloat(document.getElementById('taxPercent').value) || 0;
+            const discount = parseFloat(document.getElementById('discountPercent').value) || 0;
+
+            // Total = subtotal + tax - discount
+            const total = subtotal + (subtotal * tax / 100) - (subtotal * discount / 100);
+            document.getElementById('totalAmount').value = total.toFixed(2);
+        }
+
+        // Recalculate total when tax or discount changes
+        document.getElementById('taxPercent').addEventListener('input', updateTotals);
+        document.getElementById('discountPercent').addEventListener('input', updateTotals);
+
+        document.getElementById('invoiceForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const items = Array.from(document.querySelectorAll('.item')).map(item => ({
+                description: item.querySelector('.itemDescription').value,
+                quantity: parseFloat(item.querySelector('.itemQuantity').value),
+                price: parseFloat(item.querySelector('.itemPrice').value)
+            }));
+
+            const data = {
+                customerName: document.getElementById('customerName').value,
+                number: document.getElementById('invoiceNumber').value,
+                date: document.getElementById('invoiceDate').value,
+                items: items,
+                subtotal: parseFloat(document.getElementById('subtotal').value),
+                taxPercent: parseFloat(document.getElementById('taxPercent').value),
+                discountPercent: parseFloat(document.getElementById('discountPercent').value),
+                total: parseFloat(document.getElementById('totalAmount').value)
+            };
+
+            // Replace with your API Gateway endpoint
+            const apiUrl = 'https://wktiuwlgv8.execute-api.us-east-1.amazonaws.com/Yash-PRDO';
+
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+
+            const result = await response.json();
+            document.getElementById('downloadLink').innerHTML =
+                `<a href="${result.downloadUrl}" target="_blank">Download PDF</a>`;
         });
 
-        // Subtotal, Tax, Discount, Total
-        doc.moveDown();
-        doc.text(`Subtotal: $${invoice.subtotal.toFixed(2)}`);
-        doc.text(`Tax: ${invoice.taxPercent.toFixed(2)}%`);
-        doc.text(`Discount: ${invoice.discountPercent.toFixed(2)}%`);
-        doc.moveDown();
-        doc.fontSize(14).text(`Total: $${invoice.total.toFixed(2)}`, { bold: true });
-
-        // Footer
-        doc.moveDown();
-        doc.fontSize(12).text('Thank you for your business!', { align: 'center' });
-
-        doc.end();
-
-        // Convert buffers to single Buffer
-        const pdfBuffer = await new Promise((resolve) => {
-            const result = Buffer.concat(buffers);
-            resolve(result);
-        });
-
-        // Upload PDF to S3
-        const key = `invoices/invoice-${invoice.number}.pdf`;
-        await s3.putObject({
-            Bucket: 'pdf-generator-12',
-            Key: key,
-            Body: pdfBuffer,
-            ContentType: 'application/pdf'
-        }).promise();
-
-        // Generate pre-signed URL
-        const url = s3.getSignedUrl('getObject', {
-            Bucket: 'pdf-generator-12',
-            Key: key,
-            Expires: 3600
-        });
-
-        return {
-            statusCode: 200,
-            body: JSON.stringify({ downloadUrl: url })
-        };
-
-    } catch (error) {
-        console.error(error);
-        return { statusCode: 500, body: 'Error generating invoice PDF' };
-    }
-};
+        // Add default item
+        addItem();
+    </script>
+</body>
+</html>
